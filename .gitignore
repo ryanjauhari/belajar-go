@@ -1,0 +1,7 @@
+/go-error.log
+/go-running.log
+/mynotes.md
+/.DS_Store
+/database/*
+!/database/.gitkeep
+/belajar-go
