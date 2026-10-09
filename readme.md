@@ -141,7 +141,7 @@ Memerlukan `api_key` dan `session_id` (query atau form). Membatalkan goroutine a
 
 ## Menjalankan Program
 
-Pastikan Go tersedia dan dependensi modul telah diunduh. `--app-id` dan `--app-hash` bisa didapatkan dari [my.telegram.org](https://my.telegram.org). Ganti nilai contoh dengan kredensial dan API key milik sendiri.
+Persyaratan: Go 1.27 atau lebih baru. Versi minimum proyek dideklarasikan di `go.mod`; periksa versi yang terpasang dengan `go version`. Pastikan dependensi modul telah diunduh. `--app-id` dan `--app-hash` bisa didapatkan dari [my.telegram.org](https://my.telegram.org). Ganti nilai contoh dengan kredensial dan API key milik sendiri.
 
 Jalankan langsung dari source:
 
