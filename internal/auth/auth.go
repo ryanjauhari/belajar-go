@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,16 +32,18 @@ import (
 	"belajar-go/internal/config"
 	"belajar-go/internal/logger"
 	"belajar-go/internal/storage"
+	"belajar-go/internal/webhook"
 )
 
 // AuthSession merepresentasikan satu proses autentikasi aktif.
 type AuthSession struct {
-	SessionID string
-	ExpiredAt time.Time
-	QRCode    string             // URL QR (tg://login?token=...)
-	Cancel    context.CancelFunc // untuk menghentikan goroutine
-	qrReady   chan struct{}
-	password  string
+	SessionID   string
+	ExpiredAt   time.Time
+	QRCode      string             // URL QR (tg://login?token=...)
+	Cancel      context.CancelFunc // untuk menghentikan goroutine
+	qrReady     chan struct{}
+	password    string
+	callbackURL string
 }
 
 // Manager mengelola semua sesi auth.
@@ -51,12 +54,12 @@ type Manager struct {
 	store    *storage.Storage
 	cfg      *config.Config
 	// Callback ketika login sukses: jalankan account goroutine.
-	onLoginSuccess func(sessionID, sessionString, userID string)
+	onLoginSuccess func(sessionID, sessionString, userID, name string)
 }
 
 // NewManager membuat Manager baru.
 func NewManager(cfg *config.Config, log *logger.Logger, store *storage.Storage,
-	onLoginSuccess func(string, string, string)) *Manager {
+	onLoginSuccess func(string, string, string, string)) *Manager {
 	return &Manager{
 		sessions:       make(map[string]*AuthSession),
 		log:            log,
@@ -73,7 +76,7 @@ func generateSessionID() string {
 }
 
 // Start memulai proses auth baru.
-func (m *Manager) Start(password string) (*AuthSession, error) {
+func (m *Manager) Start(password, callbackURL string) (*AuthSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -84,11 +87,12 @@ func (m *Manager) Start(password string) (*AuthSession, error) {
 	expiredAt := time.Now().Add(2 * time.Minute)
 
 	sess := &AuthSession{
-		SessionID: sessionID,
-		ExpiredAt: expiredAt,
-		Cancel:    cancel,
-		qrReady:   make(chan struct{}),
-		password:  password,
+		SessionID:   sessionID,
+		ExpiredAt:   expiredAt,
+		Cancel:      cancel,
+		qrReady:     make(chan struct{}),
+		password:    password,
+		callbackURL: callbackURL,
 	}
 
 	m.sessions[sessionID] = sess
@@ -126,6 +130,7 @@ func (m *Manager) runAuthGoroutine(ctx context.Context, sess *AuthSession) {
 	type loginResult struct {
 		sessionString string
 		userID        string
+		name          string
 	}
 	resultChan := make(chan loginResult, 1)
 	errChan := make(chan error, 1)
@@ -182,6 +187,7 @@ func (m *Manager) runAuthGoroutine(ctx context.Context, sess *AuthSession) {
 			resultChan <- loginResult{
 				sessionString: hex.EncodeToString(sessData), // simpan sebagai hex
 				userID:        fmt.Sprintf("%d", self.ID),
+				name:          profileName(self.FirstName, self.LastName, self.Username),
 			}
 			return nil
 		})
@@ -226,6 +232,7 @@ func (m *Manager) runAuthGoroutine(ctx context.Context, sess *AuthSession) {
 				Session:   res.sessionString,
 				LastLogin: time.Now().Format("2006/01/02 15:04:05"),
 				UserID:    res.userID,
+				Name:      res.name,
 			})
 			if err != nil {
 				m.log.Error("Auth %s: gagal simpan session: %v", sess.SessionID, err)
@@ -233,7 +240,18 @@ func (m *Manager) runAuthGoroutine(ctx context.Context, sess *AuthSession) {
 			}
 
 			// Jalankan account goroutine (sebelum hentikan diri sendiri).
-			m.onLoginSuccess(sess.SessionID, res.sessionString, res.userID)
+			m.onLoginSuccess(sess.SessionID, res.sessionString, res.userID, res.name)
+			if sess.callbackURL != "" {
+				go func() {
+					if err := webhook.PostJSON(sess.callbackURL, map[string]interface{}{
+						"ok":         true,
+						"session_id": sess.SessionID,
+						"user_id":    res.userID,
+					}); err != nil {
+						m.log.Error("Auth %s: callback gagal: %v", sess.SessionID, err)
+					}
+				}()
+			}
 			return
 
 		case err := <-errChan:
@@ -247,6 +265,14 @@ func (m *Manager) cleanup(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, sessionID)
+}
+
+func profileName(firstName, lastName, username string) string {
+	name := strings.TrimSpace(firstName + " " + lastName)
+	if name == "" {
+		return username
+	}
+	return name
 }
 
 // Get mengembalikan AuthSession berdasarkan session_id.

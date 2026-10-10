@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/gotd/td/session"
@@ -99,6 +100,25 @@ func (m *Manager) runAccountGoroutine(ctx context.Context, acc *Account) {
 		// Di sini client sudah terkoneksi.
 		// Kita bisa setup handler untuk update, dsb.
 		m.log.Info("Account %s: terkoneksi ke MTProto", acc.SessionID)
+		if acc.Name == "" {
+			if self, err := acc.Client.Self(ctx); err == nil {
+				name := strings.TrimSpace(self.FirstName + " " + self.LastName)
+				if name == "" {
+					name = self.Username
+				}
+				if name != "" {
+					m.mu.Lock()
+					acc.Name = name
+					m.mu.Unlock()
+					if data, err := m.store.Load(acc.SessionID); err == nil {
+						data.Name = name
+						if err := m.store.Save(data); err != nil {
+							m.log.Error("Account %s: gagal menyimpan nama: %v", acc.SessionID, err)
+						}
+					}
+				}
+			}
+		}
 
 		// Blok sampai context dibatalkan.
 		<-ctx.Done()
@@ -150,12 +170,28 @@ func (m *Manager) StopAccount(sessionID string) error {
 	return m.store.Delete(sessionID)
 }
 
+// Shutdown menghentikan semua koneksi aktif tanpa menghapus file sesi.
+func (m *Manager) Shutdown() {
+	m.mu.RLock()
+	accounts := make([]*Account, 0, len(m.accounts))
+	for _, acc := range m.accounts {
+		accounts = append(accounts, acc)
+	}
+	m.mu.RUnlock()
+
+	for _, acc := range accounts {
+		acc.Cancel()
+		m.log.Info("Account %s dihentikan; session tetap disimpan", acc.SessionID)
+	}
+}
+
 func (m *Manager) List() []*Account {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]*Account, 0, len(m.accounts))
 	for _, acc := range m.accounts {
-		result = append(result, acc)
+		copy := *acc
+		result = append(result, &copy)
 	}
 	return result
 }
@@ -173,7 +209,7 @@ func (m *Manager) LoadAll() error {
 		return fmt.Errorf("gagal list session: %w", err)
 	}
 	for _, s := range sessions {
-		m.StartAccount(s.SessionID, s.Session, s.UserID, "")
+		m.StartAccount(s.SessionID, s.Session, s.UserID, s.Name)
 	}
 	m.log.Info("Memuat %d akun dari storage", len(sessions))
 	return nil

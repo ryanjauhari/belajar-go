@@ -51,9 +51,9 @@ func main() {
 	accMgr := account.NewManager(cfg, log, store)
 
 	// 5. Auth manager (butuh cfg untuk app_id/app_hash).
-	authMgr := auth.NewManager(cfg, log, store, func(sessionID, sessionString, userID string) {
+	authMgr := auth.NewManager(cfg, log, store, func(sessionID, sessionString, userID, name string) {
 		// Session sudah disimpan oleh auth manager; di sini hanya jalankan account.
-		accMgr.StartAccount(sessionID, sessionString, userID, "")
+		accMgr.StartAccount(sessionID, sessionString, userID, name)
 	})
 
 	// 6. Muat akun yang sudah ada.
@@ -88,9 +88,7 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(ctx)
 
-	for _, acc := range accMgr.List() {
-		_ = accMgr.StopAccount(acc.SessionID)
-	}
+	accMgr.Shutdown()
 
 	log.Info("=== Telegram Wrapper berhenti ===")
 }
